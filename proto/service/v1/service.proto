@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+package service.v1;
+
+option go_package = "github.com/joshjon/jobrunner/gen/server/v1;servicepb";
+
+service Service {
+  rpc Start(StartRequest) returns (StartResponse) {}
+  rpc Stop(StopRequest) returns (StopResponse) {}
+  rpc Query(QueryRequest) returns (QueryResponse) {}
+  rpc FollowLogs(FollowLogsRequest) returns (stream FollowLogsResponse) {}
+}
+
+message StartRequest {
+  Command command = 1;
+}
+
+message StartResponse {
+  string job_id = 1;
+}
+
+message StopRequest {
+  string job_id = 1;
+}
+
+message StopResponse {}
+
+message QueryRequest {
+  string job_id = 1;
+}
+
+message QueryResponse {
+  JobStatus job_status = 1;
+}
+
+message FollowLogsRequest {
+  string job_id = 1;
+}
+
+message FollowLogsResponse {
+  string log = 1;
+}
+
+message Command {
+  string cmd = 1;
+  repeated string args = 2;
+}
+
+message JobStatus {
+  string id = 1;
+  State state = 2;
+  int64 exit_code = 3;
+}
+
+enum State {
+  STATE_UNSPECIFIED = 0;
+  STATE_RUNNING = 1;
+  STATE_COMPLETED = 2;
+}

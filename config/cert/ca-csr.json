@@ -1,0 +1,16 @@
+{
+    "CN": "Job Runner CA",
+    "key": {
+        "algo": "rsa",
+        "size": 2048
+    },
+    "names": [
+        {
+            "C": "AU",
+            "L": "Melbourne",
+            "ST": "VIC",
+            "O": "Job Runner",
+            "OU": "CA Services"
+        }
+    ]
+}

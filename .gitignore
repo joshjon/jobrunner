@@ -1,0 +1,29 @@
+# Builds
+build/
+certs/
+
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+/dist
+
+# IDE & system Files
+/.idea
+*.iml
+/.vscode
+.DS_Store
+
+# Test binary, built with `go test -c`
+*.test
+
+# Temporary Files
+*.out
+*.log
+/tmp
+manifest.yaml
+
+# Config Files
+.editorconfig

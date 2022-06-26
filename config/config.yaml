@@ -1,0 +1,7 @@
+Port: 9090
+Cert:
+  ACLModelFile: "/etc/jobrunner/cert/model.conf"
+  ACLPolicyFile: "/etc/jobrunner/cert/policy.csv"
+  ServerCertFile: "/etc/ssl/certs/server.pem"
+  ServerKeyFile: "/etc/ssl/certs/server-key.pem"
+  CAFile: "/etc/ssl/certs/ca.pem"

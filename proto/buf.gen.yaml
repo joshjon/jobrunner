@@ -1,0 +1,12 @@
+version: v1
+plugins:
+  - name: go
+    out: gen
+    opt: paths=source_relative
+
+  - name: go-grpc
+    out: .
+    opt:
+      - module=github.com/joshjon/jobrunner
+      - require_unimplemented_servers=false
+
