@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
-	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
@@ -24,10 +23,7 @@ import (
 	servicepb "github.com/joshjon/jobrunner/proto/gen/service/v1"
 )
 
-const (
-	port    = 9595
-	timeout = 5 * time.Second
-)
+const port = 9595
 
 var (
 	CAFile               = certFile("ca.pem")
@@ -46,85 +42,60 @@ var rpcAddr = &net.TCPAddr{
 	Port: port,
 }
 
-func TestService(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-	mockWorker := NewMockWorker(ctrl)
+func TestService_StartJob(t *testing.T) {
+	deps := setup(t, RootClientCertFile, RootClientKeyFile)
+	defer deps.close()
+	wantJob := &worker.Job{ID: "1", Status: worker.JobStatus{State: worker.JobStateRunning}}
+	deps.mockWorker.EXPECT().StartJob(gomock.Any()).Return(wantJob, nil).Times(1)
+	startResp, err := deps.client.Start(context.Background(), &servicepb.StartRequest{Command: &servicepb.Command{Cmd: "some-command"}})
+	require.NoError(t, err)
+	require.NotEmpty(t, startResp.JobId)
+}
 
-	srv := newServer(t, mockWorker)
-	defer srv.Stop()
-	client := newClient(t, RootClientCertFile, RootClientKeyFile)
+func TestService_QueryJob(t *testing.T) {
+	deps := setup(t, RootClientCertFile, RootClientKeyFile)
+	defer deps.close()
+	jobID := "job-id"
+	wantJobStatus := worker.JobStatus{State: worker.JobStateRunning}
+	deps.mockWorker.EXPECT().QueryJob(gomock.Any()).Return(wantJobStatus, nil).Times(1)
+	queryResp, err := deps.client.Query(context.Background(), &servicepb.QueryRequest{JobId: jobID})
+	require.NoError(t, err)
+	require.Equal(t, servicepb.State_STATE_RUNNING, queryResp.JobStatus.State)
+	require.Equal(t, jobID, queryResp.JobStatus.Id)
+}
 
-	const wantLog = "test"
-	const numLogs = 10
+func TestService_FollowLogs(t *testing.T) {
+	deps := setup(t, RootClientCertFile, RootClientKeyFile)
+	defer deps.close()
+	jobID, wantLog, numLogs := "job-id", "test", 10
 	logCh := mockLogs(wantLog, numLogs)
+	deps.mockWorker.EXPECT().FollowLogs(gomock.Any()).Return(logCh, func() {}, nil).Times(1)
+	streamClient, err := deps.client.FollowLogs(context.Background(), &servicepb.FollowLogsRequest{JobId: jobID})
+	require.NoError(t, err)
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	var err error
-	var startResp *servicepb.StartResponse
-
-	t.Run("start new job success", func(t *testing.T) {
-		wantJob := &worker.Job{ID: "1", Status: worker.JobStatus{State: worker.JobStateRunning}}
-		mockWorker.EXPECT().StartJob(gomock.Any()).Return(wantJob, nil).Times(1)
-		startResp, err = client.Start(ctx, &servicepb.StartRequest{Command: &servicepb.Command{Cmd: "some-command"}})
+	for i := 0; i < numLogs; i++ {
+		logResp, err := streamClient.Recv()
 		require.NoError(t, err)
-		require.NotEmpty(t, startResp.JobId)
-	})
+		require.Equal(t, wantLog, logResp.Log)
+	}
+}
 
-	t.Run("query running success", func(t *testing.T) {
-		wantJobStatus := worker.JobStatus{State: worker.JobStateRunning}
-		mockWorker.EXPECT().QueryJob(gomock.Any()).Return(wantJobStatus, nil).Times(1)
-		queryResp, err := client.Query(ctx, &servicepb.QueryRequest{JobId: startResp.JobId})
-		require.NoError(t, err)
-		require.Equal(t, servicepb.State_STATE_RUNNING, queryResp.JobStatus.State)
-		require.Equal(t, startResp.JobId, queryResp.JobStatus.Id)
-	})
-
-	t.Run("follow logs", func(t *testing.T) {
-		mockWorker.EXPECT().FollowLogs(gomock.Any()).Return(logCh, func() {}, nil).Times(1)
-		streamClient, err := client.FollowLogs(ctx, &servicepb.FollowLogsRequest{JobId: startResp.JobId})
-		require.NoError(t, err)
-
-		for i := 0; i < numLogs; i++ {
-			logResp, err := streamClient.Recv()
-			require.NoError(t, err)
-			require.Equal(t, wantLog, logResp.Log)
-		}
-	})
-
-	t.Run("stop running job success", func(t *testing.T) {
-		mockWorker.EXPECT().StopJob(gomock.Any()).Return(nil).Times(1)
-		_, err := client.Stop(ctx, &servicepb.StopRequest{JobId: startResp.JobId})
-		require.NoError(t, err)
-	})
-
-	t.Run("query completed job success", func(t *testing.T) {
-		wantJobStatus := worker.JobStatus{State: worker.JobStateCompleted}
-		mockWorker.EXPECT().QueryJob(gomock.Any()).Return(wantJobStatus, nil).Times(1)
-		queryResp, err := client.Query(ctx, &servicepb.QueryRequest{JobId: startResp.JobId})
-		require.NoError(t, err)
-		require.Equal(t, servicepb.State_STATE_COMPLETED, queryResp.JobStatus.State)
-		require.Equal(t, startResp.JobId, queryResp.JobStatus.Id)
-	})
+func TestService_StopJob(t *testing.T) {
+	deps := setup(t, RootClientCertFile, RootClientKeyFile)
+	defer deps.close()
+	jobID := "job-id"
+	deps.mockWorker.EXPECT().StopJob(gomock.Any()).Return(nil).Times(1)
+	_, err := deps.client.Stop(context.Background(), &servicepb.StopRequest{JobId: jobID})
+	require.NoError(t, err)
 }
 
 func TestService_jobNotFoundError(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-	mockWorker := NewMockWorker(ctrl)
-
-	srv := newServer(t, mockWorker)
-	defer srv.Stop()
-	client := newClient(t, RootClientCertFile, RootClientKeyFile)
-
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	mockWorker.EXPECT().QueryJob(gomock.Any()).Return(worker.JobStatus{}, ErrorJobNotFound)
-	mockWorker.EXPECT().StopJob(gomock.Any()).Return(ErrorJobNotFound)
-	mockWorker.EXPECT().FollowLogs(gomock.Any()).Return(nil, nil, ErrorJobNotFound)
+	deps := setup(t, RootClientCertFile, RootClientKeyFile)
+	defer deps.close()
+	deps.mockWorker.EXPECT().QueryJob(gomock.Any()).Return(worker.JobStatus{}, ErrorJobNotFound)
+	deps.mockWorker.EXPECT().StopJob(gomock.Any()).Return(ErrorJobNotFound)
+	deps.mockWorker.EXPECT().FollowLogs(gomock.Any()).Return(nil, nil, ErrorJobNotFound)
+	ctx := context.Background()
 
 	tests := []struct {
 		name string
@@ -132,16 +103,16 @@ func TestService_jobNotFoundError(t *testing.T) {
 	}{
 		{
 			name: "query job not found error",
-			rpc:  func() (any, error) { return client.Query(ctx, &servicepb.QueryRequest{JobId: "unknown"}) },
+			rpc:  func() (any, error) { return deps.client.Query(ctx, &servicepb.QueryRequest{JobId: "unknown"}) },
 		},
 		{
 			name: "stop job not found error",
-			rpc:  func() (any, error) { return client.Stop(ctx, &servicepb.StopRequest{JobId: "unknown"}) },
+			rpc:  func() (any, error) { return deps.client.Stop(ctx, &servicepb.StopRequest{JobId: "unknown"}) },
 		},
 		{
 			name: "follow job not found error",
 			rpc: func() (any, error) {
-				streamClient, err := client.FollowLogs(ctx, &servicepb.FollowLogsRequest{JobId: "unknown"})
+				streamClient, err := deps.client.FollowLogs(ctx, &servicepb.FollowLogsRequest{JobId: "unknown"})
 				assert.NoError(t, err)
 				return streamClient.Recv()
 			},
@@ -159,21 +130,19 @@ func TestService_jobNotFoundError(t *testing.T) {
 func TestService_insecureCredentials(t *testing.T) {
 	srv := newServer(t, &MockWorker{})
 	defer srv.Stop()
-
 	conn, err := grpc.Dial(rpcAddr.String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	defer conn.Close()
 	require.NoError(t, err)
 	client := servicepb.NewServiceClient(conn)
-
 	_, err = client.Start(context.Background(), &servicepb.StartRequest{})
 	s, _ := status.FromError(err)
 	assert.Equal(t, codes.Unavailable, s.Code())
 }
 
 func TestService_unauthorized(t *testing.T) {
-	srv := newServer(t, &MockWorker{})
-	defer srv.Stop()
+	deps := setup(t, NobodyClientCertFile, NobodyClientKeyFile)
+	defer deps.close()
 	ctx := context.Background()
-	client := newClient(t, NobodyClientCertFile, NobodyClientKeyFile)
 
 	tests := []struct {
 		name   string
@@ -183,18 +152,18 @@ func TestService_unauthorized(t *testing.T) {
 		{
 			name:   "start unauthorized",
 			action: createAction,
-			rpc:    func() (any, error) { return client.Start(ctx, &servicepb.StartRequest{}) },
+			rpc:    func() (any, error) { return deps.client.Start(ctx, &servicepb.StartRequest{}) },
 		},
 		{
 			name:   "query unauthorized",
 			action: readAction,
-			rpc:    func() (any, error) { return client.Query(ctx, &servicepb.QueryRequest{}) },
+			rpc:    func() (any, error) { return deps.client.Query(ctx, &servicepb.QueryRequest{}) },
 		},
 		{
 			name:   "follow unauthorized",
 			action: readAction,
 			rpc: func() (any, error) {
-				streamClient, err := client.FollowLogs(ctx, &servicepb.FollowLogsRequest{})
+				streamClient, err := deps.client.FollowLogs(ctx, &servicepb.FollowLogsRequest{})
 				assert.NoError(t, err)
 				return streamClient.Recv()
 			},
@@ -202,7 +171,7 @@ func TestService_unauthorized(t *testing.T) {
 		{
 			name:   "stop unauthorized",
 			action: deleteAction,
-			rpc:    func() (any, error) { return client.Stop(ctx, &servicepb.StopRequest{}) },
+			rpc:    func() (any, error) { return deps.client.Stop(ctx, &servicepb.StopRequest{}) },
 		},
 	}
 
@@ -213,6 +182,34 @@ func TestService_unauthorized(t *testing.T) {
 			assert.Equal(t, codes.PermissionDenied, s.Code())
 			assert.Equal(t, fmt.Sprintf("nobody not permitted to %s on *", tt.action), s.Message())
 		})
+	}
+}
+
+type dependencies struct {
+	server     *Server
+	client     servicepb.ServiceClient
+	clientConn *grpc.ClientConn
+	mockWorker *MockWorker
+	ctrl       *gomock.Controller
+}
+
+func (d *dependencies) close() {
+	d.ctrl.Finish()
+	d.clientConn.Close()
+	d.server.Stop()
+}
+
+func setup(t *testing.T, clientCert string, clientKey string) *dependencies {
+	ctrl := gomock.NewController(t)
+	mockWorker := NewMockWorker(ctrl)
+	srv := newServer(t, mockWorker)
+	client, conn := newClient(t, clientCert, clientKey)
+	return &dependencies{
+		server:     srv,
+		client:     client,
+		clientConn: conn,
+		mockWorker: mockWorker,
+		ctrl:       ctrl,
 	}
 }
 
@@ -240,12 +237,12 @@ func newServer(t *testing.T, worker Worker) *Server {
 	return srv
 }
 
-func newClient(t *testing.T, certFile string, keyFile string) servicepb.ServiceClient {
+func newClient(t *testing.T, certFile string, keyFile string) (servicepb.ServiceClient, *grpc.ClientConn) {
 	tlsCfg, err := newTLSConfig(auth.TypeClient, certFile, keyFile)
 	require.NoError(t, err)
 	conn, err := grpc.Dial(rpcAddr.String(), grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
 	require.NoError(t, err)
-	return servicepb.NewServiceClient(conn)
+	return servicepb.NewServiceClient(conn), conn
 }
 
 func newTLSConfig(tlsType auth.Type, certFile string, keyFile string) (*tls.Config, error) {
